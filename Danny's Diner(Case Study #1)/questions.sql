@@ -61,7 +61,7 @@ AS
 	(SELECT customer_id, product_id, order_date, RANK() OVER(PARTITION BY customer_id ORDER BY order_date)
 	FROM sales s
 	JOIN members m using(customer_id)
-	where m.join_date < s.order_date)
+	where m.join_date <= s.order_date)
 SELECT customer_id, product_name
 FROM cte
 JOIN menu USING(product_id)
@@ -110,16 +110,14 @@ SELECT
 	s.customer_id,
 	SUM(
 		CASE
-			WHEN (order_date - join_date) <= 7 THEN
-				price*20
-			WHEN product_name = 'sushi' THEN
+			WHEN (order_date - join_date) BETWEEN 0 AND 6 OR product_name = 'sushi' THEN
 				price*20
 			ELSE
 				price*10
 			END
 	) AS points
 FROM sales s
-JOIN members mb ON mb.customer_id = s.customer_id AND mb.join_date <= s.order_date
+JOIN members mb ON mb.customer_id = s.customer_id 
 JOIN menu USING(product_id)
 WHERE order_date <= '2021-01-31'
 GROUP BY s.customer_id;
