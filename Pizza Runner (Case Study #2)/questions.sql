@@ -31,10 +31,12 @@ ORDER BY pizza_id, topping_name;
 
 SELECT * FROM pizza_recipes_mapped;
 -- CLEANING TABLE - customer_orders:
+DROP TABLE customer_orders_cleaned
 CREATE TEMP TABLE customer_orders_cleaned
-AS SELECT * FROM customer_orders;
+AS SELECT ROW_NUMBER() OVER() AS id, * FROM customer_orders;
 
-SELECT * FROM customer_orders_cleaned;
+SELECT * FROM customer_orders_cleaned
+order by id;
 
 UPDATE customer_orders_cleaned SET extras = null 
 WHERE extras IN ('null', '');
@@ -314,12 +316,15 @@ from cte_3;
 
 -- 5. Generate an alphabetically ordered comma separated ingredient list for each pizza order from the customer_orders table and add a 2x in front of any relevant ingredients
 -- For example: "Meat Lovers: 2xBacon, Beef, ... , Salami"
-DROP TABLE customer_orders_ingredients_array;
-CREATE TEMP TABLE customer_orders_ingredients_array
+
+-- TEMPORARY TABLE:
+DROP TABLE customer_orders_ingredients;
+CREATE TEMP TABLE customer_orders_ingredients
 AS
 WITH cte
 AS
-	(SELECT ROW_NUMBER() OVER(ORDER BY co.pizza_id) AS id, 
+	(SELECT 
+	 	id,
 	 	order_id,
 	 	co.pizza_id,
 	 	pizza_name, 
@@ -328,49 +333,88 @@ AS
 		FROM customer_orders_cleaned co
 		JOIN pizza_names pn ON pn.pizza_id = co.pizza_id),
 cte_2 AS
-(SELECT 
+(
+	SELECT 
+	id,
 	order_id,
  	pizza_id,
 	pizza_name,
-	string_agg(pt1.topping_name, ', ') AS exclusion,
-	string_agg(pt2.topping_name, ', ') AS extra
+	pt1.topping_name AS exclusion,
+	pt2.topping_name AS extra
 FROM cte 
 left JOIN pizza_toppings pt1 ON pt1.topping_id = cte.exclusion
 left join  pizza_toppings pt2 ON pt2.topping_id = cte.extra
-GROUP BY id,order_id,pizza_id,pizza_name),
+ORDER BY id),
 cte_3
 AS
-(select order_id, pizza_id, pizza_name, STRING_TO_ARRAY(exclusion, ', ') exclusions , STRING_TO_ARRAY(extra, ', ') extras from cte_2
+(select id, order_id, pizza_id, pizza_name, exclusion , extra from cte_2
 UNION
-SELECT order_id, co.pizza_id, pizza_name, STRING_TO_ARRAY(exclusions,', '), STRING_TO_ARRAY(extras,', ') 
+SELECT id, order_id, co.pizza_id, pizza_name, exclusions, extras
 FROM customer_orders_cleaned co
 JOIN pizza_names pn ON pn.pizza_id = co.pizza_id
 WHERE exclusions IS NULL AND extras IS NULL)
 	SELECT *
 	FROM cte_3;
 
-	
-SELECT 
+
+-- 
+WITH cte
+AS
+(SELECT 
 	pizza_id,
 	STRING_TO_ARRAY(STRING_AGG(topping_name, ', '),', ') AS recipes
 from
 	pizza_recipes_mapped
-GROUP BY pizza_id;
-	
-SELECT order_id, co.pizza_id, pizza_name, pr1.topping_name as exclusions, pr2.topping_name as extras
+GROUP BY pizza_id),
+cte_2
+AS
+(SELECT 
+	id,
+	pizza_id,
+	STRING_TO_ARRAY(STRING_AGG(exclusion, ', '), ', ') as exclusion,
+	STRING_TO_ARRAY(STRING_AGG(extra, ', '), ', ') as extra 
+FROM customer_orders_ingredients
+GROUP BY id, pizza_id
+ORDER BY id)
+SELECT
+	id,
+	cte.pizza_id,
+	exclusion,
+	extra,
+	CASE
+		WHEN exclusion IS NULL AND extra IS NULL THEN
+			recipes
+		WHEN exclusion IS NULL AND extra IS NOT NULL THEN
+			recipes
+		WHEN exclusion IS NOT NULL AND extra IS NULL THEN
+			ARRAY_REMOVE(recipes, exclusion)
+		ELSE
+			recipes
+		END ingredients
+FROM cte_2
+JOIN cte ON cte_2.pizza_id = cte.pizza_id
+
+SELECT 
+	pizza_id,
+	ARRAY_REMOVE(recipes, ARRAY['Bacon','Cheese'])
 FROM
-	(SELECT order_id, pizza_id, UNNEST(STRING_TO_ARRAY(exclusions,',')) :: numeric AS exclusion, UNNEST(STRING_TO_ARRAY(extras,',')) :: numeric AS extra  
-		FROM customer_orders_cleaned) co
-LEFT JOIN pizza_recipes_mapped pr1 ON pr1.toppings = exclusion
-LEFT JOIN pizza_recipes_mapped pr2 ON pr2.toppings = extra
-JOIN pizza_names pn ON pn.pizza_id = co.pizza_id
+	(SELECT 
+		pizza_id,
+		STRING_TO_ARRAY(STRING_AGG(topping_name, ', '),', ') AS recipes
+	from
+		pizza_recipes_mapped
+	GROUP BY pizza_id) pzm;
+	
 
-
-		
+	
 SELECT * FROM customer_orders_cleaned;
-SELECT * FROM customer_orders_ingredients_array;
+SELECT * FROM customer_orders_ingredients;
 SELECT * FROM pizza_recipes_mapped;
 
+select *
+from customer_orders_ingredients coi
+join pizza_recipes_mapped prm ON coi.pizza_id = prm.pizza_id
+where coi.exclusion = prm.topping_name or coi.extra = prm.topping_name
 
 -- 6. What is the total quantity of each ingredient used in all delivered pizzas sorted by most frequent first?
 
@@ -386,3 +430,40 @@ SELECT * FROM pizza_recipes_mapped
 
 -- 1. If a Meat Lovers pizza costs $12 and Vegetarian costs $10 and there were no charges for changes 
 -- - how much money has Pizza Runner made so far if there are no delivery fees?
+
+
+WITH cte
+AS
+(SELECT 
+	id,
+	order_id,
+	a.pizza_id,
+	pizza_name,
+	topping_id,
+	topping_name,
+	count(*),
+	CASE 
+		WHEN count(*) = 1 THEN
+			topping_name
+		ELSE
+			concat(count(*)::VARCHAR, 'x ', topping_name)
+		END ingredients
+FROM	
+(SELECT * FROM (SELECT id, order_id, coc.pizza_id, UNNEST(STRING_TO_ARRAY(toppings,',')) as toppings FROM customer_orders_cleaned coc
+JOIN pizza_names pn on pn.pizza_id =coc.pizza_id
+JOIN pizza_recipes pr ON pr.pizza_id =pn.pizza_id
+EXCEPT
+SELECT id, order_id, pizza_id, UNNEST(STRING_TO_ARRAY(exclusions,',')) as exclusions
+FROM customer_orders_cleaned coc)k
+UNION ALL
+SELECT id, order_id, pizza_id, UNNEST(STRING_TO_ARRAY(extras,',')) as exclusions
+FROM customer_orders_cleaned coc) a
+JOIN pizza_toppings pt on pt.topping_id = a.toppings :: numeric
+JOIN pizza_names pn on pn.pizza_id =a.pizza_id
+group by id, order_id, a.pizza_id, pizza_name, topping_id, topping_name
+ORDER BY id, order_id, a.pizza_id, topping_id, topping_name)
+select id, concat(pizza_name, ': ', STRING_AGG(ingredients,', ')) as string
+from cte
+GROUP BY id, pizza_name
+ORDER BY id
+
