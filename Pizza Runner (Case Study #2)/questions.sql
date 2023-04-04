@@ -19,6 +19,17 @@ FROM runner_orders;
 SELECT * 
 FROM runners;
 
+-- pizza_recipes cleaning
+DROP TABLE IF EXISTS pizza_recipes_mapped;
+CREATE TEMP TABLE pizza_recipes_mapped AS
+select pr.pizza_id, pizza_name, toppings, topping_name from
+(select pizza_id, unnest(string_to_array(toppings,','))::numeric as toppings 
+from pizza_recipes) pr
+JOIN pizza_toppings pt ON pt.topping_id = pr.toppings
+JOIN pizza_names pn ON pn.pizza_id = pr.pizza_id
+ORDER BY pizza_id, topping_name;
+
+SELECT * FROM pizza_recipes_mapped;
 -- CLEANING TABLE - customer_orders:
 CREATE TEMP TABLE customer_orders_cleaned
 AS SELECT * FROM customer_orders;
@@ -33,7 +44,8 @@ WHERE exclusions IN ('null', '');
 
 ALTER TABLE customer_orders_cleaned
 ALTER COLUMN order_time TYPE timestamp
-USING order_time :: timestamp
+USING order_time :: timestamp;
+
 
 -- CLEANING TABLE - runner_orders:
 
@@ -60,8 +72,15 @@ WHERE pickup_time = 'null';
 
 ALTER TABLE runner_orders_cleaned
 ALTER COLUMN pickup_time TYPE timestamp
-USING pickup_time :: timestamp
+USING pickup_time :: timestamp;
 
+ALTER TABLE runner_orders_cleaned
+ALTER COLUMN distance TYPE numeric
+USING distance :: numeric;
+
+ALTER TABLE runner_orders_cleaned
+ALTER COLUMN duration TYPE int
+USING duration :: int;
 
 -- A. Pizza Metrics
 
@@ -178,17 +197,17 @@ GROUP BY runner_id;
 
 -- 3. Is there any relationship between the number of pizzas and how long the order takes to prepare?
 
-SELECT c.order_id, EXTRACT(EPOCH FROM (pickup_time - order_time))/60 AS minutes, COUNT(pizza_id) OVER(PARTITION BY c.order_id) AS no_of_pizza
+SELECT distinct c.order_id, EXTRACT(EPOCH FROM (pickup_time - order_time))/60 AS minutes, COUNT(pizza_id) OVER(PARTITION BY c.order_id) AS no_of_pizza
 FROM customer_orders_cleaned c
 JOIN runner_orders_cleaned r ON c.order_id=r.order_id AND cancellation IS NULL
-ORDER BY minutes DESC
+ORDER BY minutes DESC;
 
 -- 4. What was the average distance travelled for each customer?
 
 SELECT customer_id, avg(distance :: numeric)
 FROM runner_orders_cleaned
 JOIN customer_orders_cleaned USING(order_id)
-GROUP BY customer_id
+GROUP BY customer_id;
 
 -- 5. What was the difference between the longest and shortest delivery times for all orders?
 
@@ -198,3 +217,172 @@ JOIN runner_orders_cleaned USING(order_id);
 
 -- 6. What was the average speed for each runner for each delivery and do you notice any trend for these values?
 
+SELECT 
+		order_id, 
+		round((distance/(duration::numeric/60)),2) as order_speed, 
+		AVG(ROUND(distance/(duration::numeric/60),2)) OVER(PARTITION BY runner_id) AS runner_average,
+		EXTRACT(HOUR FROM order_time) AS hour_of_day
+FROM runner_orders_cleaned
+JOIN customer_orders_cleaned USING(order_id); 
+
+-- 7. What is the successful delivery percentage for each runner?
+
+SELECT runner_id, (count(order_id)-count(cancellation))/count(order_id)::numeric * 100 as success_del_perc
+FROM runner_orders_cleaned
+GROUP BY runner_id;
+
+SELECT *
+from runner_orders_cleaned;
+
+-- C. Ingredient Optimisation
+
+-- 1. What are the standard ingredients for each pizza?
+
+SELECT pizza_name, STRING_AGG(topping_name, ', ')
+FROM pizza_recipes_mapped pr
+JOIN pizza_toppings pt ON pr.toppings = pt.topping_id
+JOIN pizza_names pn ON pn.pizza_id = pr.pizza_id
+GROUP BY pizza_name;
+
+
+-- 2. What was the most commonly added extra?
+
+SELECT topping_name, count(*)
+FROM
+	(select UNNEST(STRING_TO_ARRAY(extras,',')) :: numeric AS extra
+	from customer_orders_cleaned) co
+JOIN pizza_toppings pz ON co.extra = pz.topping_id
+GROUP BY topping_name
+ORDER BY count DESC
+LIMIT 1;
+
+-- 3. What was the most common exclusion?
+
+SELECT topping_name, count(*)
+FROM
+	(select UNNEST(STRING_TO_ARRAY(exclusions,',')) :: numeric AS exclusion
+	from customer_orders_cleaned) co
+JOIN pizza_toppings pz ON co.exclusion = pz.topping_id
+GROUP BY topping_name
+ORDER BY count DESC
+LIMIT 1;
+
+-- 4. Generate an order item for each record in the customers_orders table in the format of one of the following:
+-- Meat Lovers
+-- Meat Lovers - Exclude Beef
+-- Meat Lovers - Extra Bacon
+-- Meat Lovers - Exclude Cheese, Bacon - Extra Mushroom, Peppers
+
+WITH cte
+AS
+(SELECT order_id, pizza_name, UNNEST(STRING_TO_ARRAY(exclusions,',')) :: numeric AS exclusion, UNNEST(STRING_TO_ARRAY(extras,',')) :: numeric AS extra  
+	FROM customer_orders_cleaned co
+	JOIN pizza_names pn ON pn.pizza_id = co.pizza_id),
+cte_2 AS
+(SELECT 
+	order_id,
+	pizza_name,
+	string_agg(pt1.topping_name, ', ') AS exclusion,
+	string_agg(pt2.topping_name, ', ') AS extra
+FROM cte 
+left JOIN pizza_toppings pt1 ON pt1.topping_id = cte.exclusion
+left join  pizza_toppings pt2 ON pt2.topping_id = cte.extra
+GROUP BY cte.order_id, pizza_name),
+cte_3 AS
+(
+	select order_id, pizza_name, exclusion, extra from cte_2
+	UNION
+	SELECT order_id, pizza_name, exclusions, extras 
+	FROM customer_orders_cleaned co
+	JOIN pizza_names pn ON pn.pizza_id = co.pizza_id
+	WHERE exclusions IS NULL AND extras IS NULL
+)
+select 
+	order_id,
+	CASE
+		WHEN exclusion IS NOT NULL AND extra IS NOT NULL THEN
+			CONCAT(pizza_name, ' - ','Exclude ', exclusion, ' - ', 'Extra ', extra)
+		WHEN exclusion IS NULL AND extra IS NOT NULL THEN
+			CONCAT(pizza_name, ' - ','Extra ', extra)
+		WHEN exclusion IS NOT NULL AND extra IS NULL THEN
+			CONCAT(pizza_name, ' - ','Exclude ', exclusion)
+		ELSE
+			CONCAT(pizza_name)
+	END	AS "order item"
+from cte_3;
+
+
+-- 5. Generate an alphabetically ordered comma separated ingredient list for each pizza order from the customer_orders table and add a 2x in front of any relevant ingredients
+-- For example: "Meat Lovers: 2xBacon, Beef, ... , Salami"
+DROP TABLE customer_orders_ingredients_array;
+CREATE TEMP TABLE customer_orders_ingredients_array
+AS
+WITH cte
+AS
+	(SELECT ROW_NUMBER() OVER(ORDER BY co.pizza_id) AS id, 
+	 	order_id,
+	 	co.pizza_id,
+	 	pizza_name, 
+ 		UNNEST(STRING_TO_ARRAY(exclusions,',')) :: numeric AS exclusion, 
+	 	UNNEST(STRING_TO_ARRAY(extras,',')) :: numeric AS extra  
+		FROM customer_orders_cleaned co
+		JOIN pizza_names pn ON pn.pizza_id = co.pizza_id),
+cte_2 AS
+(SELECT 
+	order_id,
+ 	pizza_id,
+	pizza_name,
+	string_agg(pt1.topping_name, ', ') AS exclusion,
+	string_agg(pt2.topping_name, ', ') AS extra
+FROM cte 
+left JOIN pizza_toppings pt1 ON pt1.topping_id = cte.exclusion
+left join  pizza_toppings pt2 ON pt2.topping_id = cte.extra
+GROUP BY id,order_id,pizza_id,pizza_name),
+cte_3
+AS
+(select order_id, pizza_id, pizza_name, STRING_TO_ARRAY(exclusion, ', ') exclusions , STRING_TO_ARRAY(extra, ', ') extras from cte_2
+UNION
+SELECT order_id, co.pizza_id, pizza_name, STRING_TO_ARRAY(exclusions,', '), STRING_TO_ARRAY(extras,', ') 
+FROM customer_orders_cleaned co
+JOIN pizza_names pn ON pn.pizza_id = co.pizza_id
+WHERE exclusions IS NULL AND extras IS NULL)
+	SELECT *
+	FROM cte_3;
+
+	
+SELECT 
+	pizza_id,
+	STRING_TO_ARRAY(STRING_AGG(topping_name, ', '),', ') AS recipes
+from
+	pizza_recipes_mapped
+GROUP BY pizza_id;
+	
+SELECT order_id, co.pizza_id, pizza_name, pr1.topping_name as exclusions, pr2.topping_name as extras
+FROM
+	(SELECT order_id, pizza_id, UNNEST(STRING_TO_ARRAY(exclusions,',')) :: numeric AS exclusion, UNNEST(STRING_TO_ARRAY(extras,',')) :: numeric AS extra  
+		FROM customer_orders_cleaned) co
+LEFT JOIN pizza_recipes_mapped pr1 ON pr1.toppings = exclusion
+LEFT JOIN pizza_recipes_mapped pr2 ON pr2.toppings = extra
+JOIN pizza_names pn ON pn.pizza_id = co.pizza_id
+
+
+		
+SELECT * FROM customer_orders_cleaned;
+SELECT * FROM customer_orders_ingredients_array;
+SELECT * FROM pizza_recipes_mapped;
+
+
+-- 6. What is the total quantity of each ingredient used in all delivered pizzas sorted by most frequent first?
+
+SELECT pizza_id
+FROM customer_orders_cleaned co
+JOIN runner_orders_cleaned ro ON ro.order_id = co.order_id 
+WHERE cancellation IS NULL;
+
+SELECT * FROM pizza_recipes_mapped
+
+
+-- D. Pricing and Ratings
+
+-- 1. If a Meat Lovers pizza costs $12 and Vegetarian costs $10 and there were no charges for changes 
+-- - how much money has Pizza Runner made so far if there are no delivery fees?
