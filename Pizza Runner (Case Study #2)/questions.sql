@@ -491,7 +491,7 @@ FROM runner_rating_schema.runner_rating rr
 JOIN runner_orders_cleaned ro USING(order_id)
 JOIN customer_orders_cleaned co USING(order_id);
 
--- If a Meat Lovers pizza was $12 and Vegetarian $10 fixed prices with no cost for extras and each runner is paid $0.30 per kilometre traveled
+-- 5. If a Meat Lovers pizza was $12 and Vegetarian $10 fixed prices with no cost for extras and each runner is paid $0.30 per kilometre traveled
 -- - how much money does Pizza Runner have left over after these deliveries?
 
 WITH cte
@@ -512,4 +512,8 @@ from cte
 -- If Danny wants to expand his range of pizzas - how would this impact the existing data design? 
 -- Write an INSERT statement to demonstrate what would happen if a new Supreme pizza with all the toppings was added to the Pizza Runner menu?
 
+INSERT INTO pizza_names VALUES(3, 'Supreme');
 
+SELECT * FROM pizza_recipes;
+INSERT INTO pizza_recipes (pizza_id, toppings)  
+(SELECT 3, string_agg(topping_id :: varchar, ', ') FROM pizza_toppings);
