@@ -203,7 +203,44 @@ FROM cte
 WHERE difference>0
 
 -- 10. Can you further breakdown this average value into 30 day periods (i.e. 0-30 days, 31-60 days etc)
--- INCOMPLETE
+
+-- INITIAL APPROACH
+-- WITH cte
+-- AS
+-- (	
+-- 	SELECT 
+-- 		*,
+-- 		LAST_VALUE(start_date) OVER(PARTITION BY customer_id ORDER BY plan_id)	
+-- 		- FIRST_VALUE(start_date) OVER(PARTITION BY customer_id ORDER BY plan_id) AS difference	
+-- 	FROM subscriptions
+-- 	WHERE plan_id IN (0,3)
+-- 	order by customer_id
+-- ),
+-- cte_2 
+-- AS
+-- (
+-- 	SELECT 
+-- 		generate_series(min(difference), max(difference), 30) as r_from
+-- 	FROM cte
+-- 	WHERE difference>0
+-- ),
+-- range
+-- AS
+-- (
+-- 	SELECT 
+-- 		r_from,
+-- 		LEAD(r_from, 1) over() -1 as r_to
+-- 	FROM cte_2
+-- )
+-- SELECT 
+-- 	r_from,
+-- 	r_to,
+-- 	(SELECT round(avg(difference)) from cte WHERE difference BETWEEN r_from AND r_to) AS average_days,
+-- 	(SELECT count(difference) from cte WHERE difference BETWEEN r_from AND r_to) AS average_days
+-- FROM
+-- 	range
+
+-- range 0 to 30
 WITH cte
 AS
 (	
@@ -214,26 +251,155 @@ AS
 	FROM subscriptions
 	WHERE plan_id IN (0,3)
 	order by customer_id
+),
+series 
+AS
+(
+	SELECT 
+		generate_series(0, MAX(difference)+30, 30) as r_from
+	FROM cte
+	WHERE difference>0
+),
+range
+AS
+(
+	SELECT 
+		r_from,
+		LEAD(r_from, 1) over() -1 as r_to
+	FROM series
 )
 SELECT 
-	CASE difference
-		WHEN >30 THEN "0-30 DAYS"
-		WHEN >
-FROM cte
-WHERE difference>0
+	r_from,
+	r_to,
+	(SELECT round(avg(difference)) from cte WHERE (difference BETWEEN r_from AND r_to) AND difference!=0)  AS average_days,
+	(SELECT count(difference) from cte WHERE difference BETWEEN r_from AND r_to AND difference!=0) AS customer_count
+FROM
+	range
+WHERE 
+	r_to IS NOT NULL
+
 
 -- 11. How many customers downgraded from a pro monthly to a basic monthly plan in 2020?
 
 WITH cte
 AS
 (
-SELECT 
-	customer_id,
-	plan_id,
-	LEAD(plan_id, 1) OVER(PARTITION BY customer_id ORDER BY start_date) l
-FROM subscriptions
-WHERE plan_id = 3
+	SELECT 
+		customer_id,
+		plan_id,
+		LEAD(plan_id, 1) OVER(PARTITION BY customer_id ORDER BY start_date) l
+	FROM subscriptions
+	WHERE plan_id = 3
 )
 SELECT count(*)
 FROM cte
 WHERE l=2;
+
+-- C. Challenge Payment Question
+
+-- MY APPROACH:::::
+-- WITH cte
+-- AS
+-- (
+-- 	SELECT
+-- 		customer_id,
+-- 		s.plan_id,
+-- 		plan_name,
+-- 		start_date as payment_date,
+-- 		LEAD(plan_name,1) OVER(PARTITION BY customer_id) as next_plan_name,
+-- 		LEAD(start_date,1) OVER(PARTITION BY customer_id) as next_plan_date,
+-- 		price
+-- 	FROM
+-- 		subscriptions s
+-- 	JOIN 
+-- 		plans p USING(plan_id)
+-- 	WHERE plan_id <> 0 AND start_date<'2021-01-01'
+-- -- 	ORDER BY customer_id, start_date
+-- 	UNION
+-- 	SELECT 
+-- 		customer_id,
+-- 		s.plan_id,
+-- 		plan_name,
+-- 		CASE 
+-- 			WHEN plan_id IN (1,2) AND start_date THEN DATE(c.payment_date + INTERVAL '1 MONTH')
+-- 			WHEN plan_id = 3 THEN DATE(c.payment_date + INTERVAL '1 YEAR')
+	
+			
+-- )
+-- SELECT
+-- 	s.customer_id,
+-- 	s.plan_id,
+-- 	DATE(c.start_date + INTERVAL '1 month') payment_date
+-- FROM 
+-- 	subscriptions s
+-- JOIN 
+-- 	cte c ON c.customer_id=s.customer_id AND c.plan_id = s.plan_id
+-- WHERE 
+-- 	c.start_date<next_plan_date
+-- ORDER BY 
+-- 	customer_id, payment_date
+	
+-- WORKING::::
+-- customer_id    plan_id    plan_name    payment_date    amount    payment_order
+WITH cte1 AS(
+SELECT customer_id, plan_id, start_date,LEAD(start_date) OVER(PARTITION BY customer_id ORDER BY start_date) AS next_start_date
+FROM
+subscriptions
+WHERE plan_id IN (1,2,3,4)
+),
+cte2 AS(
+SELECT *, 
+GENERATE_SERIES(start_date,
+CASE
+WHEN plan_id = 0 OR plan_id = 4 THEN NULL
+WHEN plan_id = 3 THEN start_date
+ELSE LEAST(next_start_date - INTERVAL '1 DAY' , '2020-12-31' :: DATE) 
+END, '1 Month') :: DATE
+FROM 
+cte1
+),
+cte3 AS(
+SELECT cte2.plan_id, customer_id, generate_series, plan_name, price,
+ROW_NUMBER() OVER(PARTITION BY customer_id ORDER BY generate_series),
+LAG(cte2.plan_id) OVER(PARTITION BY customer_id ORDER BY start_date) AS prev_plan_id,
+LAG(price) OVER(PARTITION BY customer_id ORDER BY start_date) AS prev_price
+FROM cte2
+JOIN plans p ON cte2.plan_id = p.plan_id
+)
+SELECT customer_id, plan_id, plan_name, generate_series AS payment_date, 
+CASE
+WHEN plan_id IN (2, 3) AND prev_plan_id = 1 THEN price - prev_price
+ELSE price
+END AS amount,
+row_number AS payment_order
+FROM
+cte3;
+
+-- D. Outside The Box Questions
+
+-- 1. How would you calculate the rate of growth for Foodie-Fi?
+
+WITH cte
+AS
+(
+	SELECT *, 
+		EXTRACT(MONTH FROM start_date) as month, 
+		EXTRACT(YEAR FROM start_date) AS year
+	FROM subscriptions
+),
+cte_2
+AS
+(
+	select year, month, count(*) 
+	from cte
+	GROUP BY year, month
+	order by year, month
+)
+SELECT 
+	year,
+	month,
+	count,
+	(count*100/sum(count)) as perc
+FROM
+	cte_2;
+	
