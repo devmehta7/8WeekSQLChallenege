@@ -296,84 +296,71 @@ FROM cte
 WHERE l=2;
 
 -- C. Challenge Payment Question
-
--- MY APPROACH:::::
--- WITH cte
--- AS
--- (
--- 	SELECT
--- 		customer_id,
--- 		s.plan_id,
--- 		plan_name,
--- 		start_date as payment_date,
--- 		LEAD(plan_name,1) OVER(PARTITION BY customer_id) as next_plan_name,
--- 		LEAD(start_date,1) OVER(PARTITION BY customer_id) as next_plan_date,
--- 		price
--- 	FROM
--- 		subscriptions s
--- 	JOIN 
--- 		plans p USING(plan_id)
--- 	WHERE plan_id <> 0 AND start_date<'2021-01-01'
--- -- 	ORDER BY customer_id, start_date
--- 	UNION
--- 	SELECT 
--- 		customer_id,
--- 		s.plan_id,
--- 		plan_name,
--- 		CASE 
--- 			WHEN plan_id IN (1,2) AND start_date THEN DATE(c.payment_date + INTERVAL '1 MONTH')
--- 			WHEN plan_id = 3 THEN DATE(c.payment_date + INTERVAL '1 YEAR')
-	
-			
--- )
--- SELECT
--- 	s.customer_id,
--- 	s.plan_id,
--- 	DATE(c.start_date + INTERVAL '1 month') payment_date
--- FROM 
--- 	subscriptions s
--- JOIN 
--- 	cte c ON c.customer_id=s.customer_id AND c.plan_id = s.plan_id
--- WHERE 
--- 	c.start_date<next_plan_date
--- ORDER BY 
--- 	customer_id, payment_date
-	
--- WORKING::::
--- customer_id    plan_id    plan_name    payment_date    amount    payment_order
-WITH cte1 AS(
-SELECT customer_id, plan_id, start_date,LEAD(start_date) OVER(PARTITION BY customer_id ORDER BY start_date) AS next_start_date
+-- GITHUB's
+SELECT
+  customer_id,
+  plan_id,
+  plan_name,
+  payment_date ::date :: varchar,
+  CASE
+    WHEN LAG(plan_id) OVER (
+      PARTITION BY customer_id
+      ORDER BY
+        plan_id
+    ) != plan_id
+    AND DATE_PART(
+      'day',
+      payment_date - LAG(payment_date) OVER (
+        PARTITION BY customer_id
+        ORDER BY
+          plan_id
+      )
+    ) < 30 THEN amount - LAG(amount) OVER (
+      PARTITION BY customer_id
+      ORDER BY
+        plan_id
+    )
+    ELSE amount
+  END AS amount,
+  RANK() OVER(
+    PARTITION BY customer_id
+    ORDER BY
+      payment_date
+  ) AS payment_order 
+  
+INTO TEMP TABLE payments
 FROM
-subscriptions
-WHERE plan_id IN (1,2,3,4)
-),
-cte2 AS(
-SELECT *, 
-GENERATE_SERIES(start_date,
-CASE
-WHEN plan_id = 0 OR plan_id = 4 THEN NULL
-WHEN plan_id = 3 THEN start_date
-ELSE LEAST(next_start_date - INTERVAL '1 DAY' , '2020-12-31' :: DATE) 
-END, '1 Month') :: DATE
-FROM 
-cte1
-),
-cte3 AS(
-SELECT cte2.plan_id, customer_id, generate_series, plan_name, price,
-ROW_NUMBER() OVER(PARTITION BY customer_id ORDER BY generate_series),
-LAG(cte2.plan_id) OVER(PARTITION BY customer_id ORDER BY start_date) AS prev_plan_id,
-LAG(price) OVER(PARTITION BY customer_id ORDER BY start_date) AS prev_price
-FROM cte2
-JOIN plans p ON cte2.plan_id = p.plan_id
-)
-SELECT customer_id, plan_id, plan_name, generate_series AS payment_date, 
-CASE
-WHEN plan_id IN (2, 3) AND prev_plan_id = 1 THEN price - prev_price
-ELSE price
-END AS amount,
-row_number AS payment_order
-FROM
-cte3;
+(SELECT
+      customer_id,
+      s.plan_id,
+      plan_name,
+      generate_series(
+        start_date,
+        CASE
+          WHEN s.plan_id = 3 THEN start_date
+          WHEN s.plan_id = 4 THEN NULL
+          WHEN LEAD(start_date) OVER (PARTITION BY customer_id ORDER BY start_date) IS NOT NULL 
+		  	THEN LEAD(start_date) OVER (PARTITION BY customer_id ORDER BY start_date)
+          ELSE '2020-12-31' :: date
+        END,
+        '1 month' + '1 second' :: interval
+      ) AS payment_date,
+      price AS amount
+    FROM
+      subscriptions AS s
+      JOIN plans AS p ON s.plan_id = p.plan_id
+    WHERE
+      s.plan_id != 0
+      AND start_date < '2021-01-01' :: date
+    GROUP BY
+      customer_id,
+      s.plan_id,
+      plan_name,
+      start_date,
+      price
+) t
+ORDER BY
+  customer_id
 
 -- D. Outside The Box Questions
 
@@ -382,24 +369,25 @@ cte3;
 WITH cte
 AS
 (
-	SELECT *, 
+	SELECT
+		*,
 		EXTRACT(MONTH FROM start_date) as month, 
 		EXTRACT(YEAR FROM start_date) AS year
 	FROM subscriptions
-),
-cte_2
-AS
-(
-	select year, month, count(*) 
-	from cte
-	GROUP BY year, month
-	order by year, month
+	WHERE plan_id != 4
 )
-SELECT 
+SELECT
 	year,
 	month,
-	count,
-	(count*100/sum(count)) as perc
-FROM
-	cte_2;
+	count(customer_id) as current_number_of_customers,
+	LAG(count(customer_id), 1) OVER(ORDER BY year, month) past_number_of_customers,
+	(100 * (COUNT(customer_id) - LAG(COUNT(customer_id), 1) OVER(ORDER BY year, month)) / LAG(COUNT(customer_id), 1) over (
+  ORDER BY
+	year, month)
+)|| '%' AS growth
+from cte
+GROUP BY year, month
+order by year, month;
+
+	
 	
