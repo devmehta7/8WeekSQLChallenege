@@ -154,6 +154,66 @@ SELECT
 	count(DISTINCT customer_id) * 100/ (SELECT COUNT(DISTINCT customer_id) FROM data_bank.customer_transactions) AS cust_perc 
 FROM cte_2
 WHERE perc_increase > 5;
+GO
 
+-------------
+-- C. Data Allocation Challenge
+-------------
+
+SELECT * FROM #closing_balance;
+
+-- OPTION-1
+WITH cte
+AS
+(SELECT 
+	customer_id,
+	txn_type,
+	txn_amount,
+	CASE 
+		WHEN txn_type = 'deposit' THEN txn_amount ELSE -txn_amount END as signed_amt,
+	txn_date
+FROM data_bank.customer_transactions )
+SELECT 
+	*,
+	SUM(signed_amt) OVER(PARTITION BY customer_id ORDER BY txn_date) AS running_cust_bal
+INTO #running_balance
+FROM 
+	cte
+
+SELECT * FROM #running_balance;
+
+-- OPTION-2
+
+SELECT 
+	DISTINCT customer_id,
+	MONTH(txn_date) as month,
+	LAST_VALUE(running_cust_bal) OVER(PARTITION BY customer_id,MONTH(txn_date)  ORDER BY month(txn_date)) as cust_end_month_bal
+FROM #running_balance;
+--ABOVE AND BELOW BOTH WORKS THE SAME, INITIALLY FACING ISSUE REGARDING LAST_VALUE() FUNCTION.
+WITH cte AS
+(	SELECT 
+		customer_id,
+		MONTH(txn_date) as mon,
+		running_cust_bal
+	FROM #running_balance)
+SELECT 
+	DISTINCT customer_id,
+	mon,
+	LAST_VALUE(running_cust_bal) OVER(PARTITION BY customer_id,mon  ORDER BY mon) as cust_end_month_bal
+FROM cte;
+
+--OPTION -3
+
+SELECT 
+	customer_id,
+	MIN(running_cust_bal) as min_bal,
+	AVG(running_cust_bal) as avg_bal,
+	MAX(running_cust_bal) as max_bal
+FROM 
+	#running_balance
+GROUP BY 
+	customer_id
+ORDER BY 
+	customer_id;
 
 
