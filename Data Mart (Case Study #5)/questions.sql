@@ -334,21 +334,222 @@ SELECT
 	after_total_sales,
 	after_total_sales - before_total_sales AS change_in_sales,
 	(after_total_sales-before_total_sales)*100.0/before_total_sales AS percentage_of_change
-FROM cte
+FROM cte;
+GO
 
--- How do the sale metrics for these 2 periods before and after compare with the previous years in 2018 and 2019?
+-- 3. How do the sale metrics for these 2 periods before and after compare with the previous years in 2018 and 2019?
+
+WITH before
+AS
+(SELECT 
+	calendar_year,
+	SUM(CAST(sales AS BIGINT)) AS total_sales_before
+FROM 
+	clean_weekly_sales
+WHERE week_number BETWEEN (25-4) AND (25-1)
+GROUP BY calendar_year),
+after AS
+(
+	SELECT 
+		calendar_year,
+		SUM(CAST(sales AS BIGINT)) AS total_sales_after
+	FROM 
+		clean_weekly_sales
+	WHERE week_number BETWEEN 25 AND (25+3)
+	GROUP BY calendar_year
+)
+	SELECT 
+		before.calendar_year,
+		total_sales_before,
+		total_sales_after,
+		total_sales_after - total_sales_before AS change_in_sales,
+		CAST(ROUND(100.0 * (total_sales_after - total_sales_before) / total_sales_before,2) AS numeric(20,2)) AS percentage_of_change
+	FROM
+		before
+	JOIN 
+		after ON before.calendar_year = after.calendar_year
+	ORDER BY 
+		calendar_year;
+
+ --SELECT calendar_year,sum(sales) FROM clean_weekly_sales WHERE week_number = 25-4 GROUP BY calendar_year;
+
+ --------------------
+ -- 4. Bonus Question
+ --------------------
+ --Which areas of the business have the highest negative impact in sales metrics performance in 2020 for the 12 week before and after period?
+ -- region
+--platform
+--age_band
+--demographic
+--customer_type
 
 
-SELECT
-	SUM(
-		CASE 
-			WHEN before_after = 'before' THEN CAST(sales AS bigint) END
-	) AS before_total_sales,
-	SUM(
-	CASE 
-		WHEN before_after = 'after' THEN CAST(sales AS bigint) END
-	) AS after_total_sales
-FROM clean_weekly_sales
-WHERE DATEDIFF(WEEK, week_date, '2018-06-15') BETWEEN -11 AND 12
- 
+--  *FOR REGION
+WITH before
+AS
+(SELECT 
+	region,
+	SUM(CAST(sales AS BIGINT)) AS total_sales_before
+FROM 
+	clean_weekly_sales
+WHERE DATEDIFF(WEEK, week_date, '2020-06-15') BETWEEN 1 AND 12
+GROUP BY region),
+after AS
+(
+	SELECT 
+		region,
+		SUM(CAST(sales AS BIGINT)) AS total_sales_after
+	FROM 
+		clean_weekly_sales
+	WHERE DATEDIFF(WEEK, week_date, '2020-06-15') BETWEEN -11 AND 0
+	GROUP BY region
+)
+	SELECT 
+		before.region,
+		total_sales_before,
+		total_sales_after,
+		total_sales_after - total_sales_before AS change_in_sales,
+		CAST(ROUND(100.0 * (total_sales_after - total_sales_before) / total_sales_before,2) AS numeric(20,2)) AS percentage_of_change
+	FROM
+		before
+	JOIN 
+		after ON before.region = after.region
+	ORDER BY 
+		percentage_of_change;
+
+-- *FOR PLATFORM
+WITH before
+AS
+(SELECT 
+	platform,
+	SUM(CAST(sales AS BIGINT)) AS total_sales_before
+FROM 
+	clean_weekly_sales
+WHERE DATEDIFF(WEEK, week_date, '2020-06-15') BETWEEN 1 AND 12
+GROUP BY platform),
+after AS
+(
+	SELECT 
+		platform,
+		SUM(CAST(sales AS BIGINT)) AS total_sales_after
+	FROM 
+		clean_weekly_sales
+	WHERE DATEDIFF(WEEK, week_date, '2020-06-15') BETWEEN -11 AND 0
+	GROUP BY platform
+)
+	SELECT 
+		before.platform,
+		total_sales_before,
+		total_sales_after,
+		total_sales_after - total_sales_before AS change_in_sales,
+		CAST(ROUND(100.0 * (total_sales_after - total_sales_before) / total_sales_before,2) AS numeric(20,2)) AS percentage_of_change
+	FROM
+		before
+	JOIN 
+		after ON before.platform = after.platform
+	ORDER BY 
+		percentage_of_change;
+
+-- *age_band
+
+WITH before
+AS
+(SELECT 
+	age_band,
+	SUM(CAST(sales AS BIGINT)) AS total_sales_before
+FROM 
+	clean_weekly_sales
+WHERE DATEDIFF(WEEK, week_date, '2020-06-15') BETWEEN 1 AND 12
+GROUP BY age_band),
+after AS
+(
+	SELECT 
+		age_band,
+		SUM(CAST(sales AS BIGINT)) AS total_sales_after
+	FROM 
+		clean_weekly_sales
+	WHERE DATEDIFF(WEEK, week_date, '2020-06-15') BETWEEN -11 AND 0
+	GROUP BY age_band
+)
+	SELECT 
+		before.age_band,
+		total_sales_before,
+		total_sales_after,
+		total_sales_after - total_sales_before AS change_in_sales,
+		CAST(ROUND(100.0 * (total_sales_after - total_sales_before) / total_sales_before,2) AS numeric(20,2)) AS percentage_of_change
+	FROM
+		before
+	JOIN 
+		after ON before.age_band = after.age_band
+	ORDER BY 
+		percentage_of_change;
+
+-- *demographic
+
+WITH before
+AS
+(SELECT 
+	demographic,
+	SUM(CAST(sales AS BIGINT)) AS total_sales_before
+FROM 
+	clean_weekly_sales
+WHERE DATEDIFF(WEEK, week_date, '2020-06-15') BETWEEN 1 AND 12
+GROUP BY demographic),
+after AS
+(
+	SELECT 
+		demographic,
+		SUM(CAST(sales AS BIGINT)) AS total_sales_after
+	FROM 
+		clean_weekly_sales
+	WHERE DATEDIFF(WEEK, week_date, '2020-06-15') BETWEEN -11 AND 0
+	GROUP BY demographic
+)
+	SELECT 
+		before.demographic,
+		total_sales_before,
+		total_sales_after,
+		total_sales_after - total_sales_before AS change_in_sales,
+		CAST(ROUND(100.0 * (total_sales_after - total_sales_before) / total_sales_before,2) AS numeric(20,2)) AS percentage_of_change
+	FROM
+		before
+	JOIN 
+		after ON before.demographic = after.demographic
+	ORDER BY 
+		percentage_of_change;
+
+-- *customer_type
+
+WITH before
+AS
+(SELECT 
+	customer_type,
+	SUM(CAST(sales AS BIGINT)) AS total_sales_before
+FROM 
+	clean_weekly_sales
+WHERE DATEDIFF(WEEK, week_date, '2020-06-15') BETWEEN 1 AND 12
+GROUP BY customer_type),
+after AS
+(
+	SELECT 
+		customer_type,
+		SUM(CAST(sales AS BIGINT)) AS total_sales_after
+	FROM 
+		clean_weekly_sales
+	WHERE DATEDIFF(WEEK, week_date, '2020-06-15') BETWEEN -11 AND 0
+	GROUP BY customer_type
+)
+	SELECT 
+		before.customer_type,
+		total_sales_before,
+		total_sales_after,
+		total_sales_after - total_sales_before AS change_in_sales,
+		CAST(ROUND(100.0 * (total_sales_after - total_sales_before) / total_sales_before,2) AS numeric(20,2)) AS percentage_of_change
+	FROM
+		before
+	JOIN 
+		after ON before.customer_type = after.customer_type
+	ORDER BY 
+		percentage_of_change;
+
 
